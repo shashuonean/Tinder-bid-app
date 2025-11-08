@@ -1,0 +1,397 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>TenderBid: India's Premier Tender & BBMP Bidding Platform</title>
+    <!-- CRITICAL SEO STEP 1: Description Tag -->
+    <meta name="description" content="TenderBid connects contractors and clients for BBMP-certified infrastructure projects. Post your project or place a bid and collect a 5% commission.">
+    <!-- CRITICAL SEO STEP 2: Robots Tag -->
+    <meta name="robots" content="index, follow">
+
+    <!-- Load Tailwind CSS -->
+    <script src="https://cdn.tailwindcss.com"></script>
+    <!-- Load React and ReactDOM (Development/CDN versions) -->
+    <script src="https://unpkg.com/react@18/umd/react.development.js"></script>
+    <script src="https://unpkg.com/react-dom@18/umd/react-dom.development.js"></script>
+    <!-- Load Babel for JSX/ES6 support -->
+    <script src="https://unpkg.com/@babel/standalone/babel.min.js"></script>
+    <!-- Firebase Dependencies -->
+    <script type="module">
+        import { initializeApp } from "https://www.gstatic.com/firebasejs/11.6.1/firebase-app.js";
+        import { getAuth, signInAnonymously, signInWithCustomToken, onAuthStateChanged } from "https://www.gstatic.com/firebasejs/11.6.1/firebase-auth.js";
+        import { getFirestore, doc, setDoc, getDoc, collection, query, onSnapshot, where, addDoc, updateDoc, writeBatch } from "https://www.gstatic.com/firebasejs/11.6.1/firebase-firestore.js";
+
+        // Expose Firebase components globally or attach them to a global state/object
+        window.firebase = {
+            initializeApp, getAuth, signInAnonymously, signInWithCustomToken, onAuthStateChanged,
+            getFirestore, doc, setDoc, getDoc, collection, query, onSnapshot, where, addDoc, updateDoc, writeBatch
+        };
+
+        // --- Global Variables (Mandatory for Canvas Environment, kept for structure) ---
+        const appId = typeof __app_id !== 'undefined' ? __app_id : 'default-app-id';
+        const firebaseConfig = typeof __firebase_config !== 'undefined' ? JSON.parse(__firebase_config) : {};
+        const initialAuthToken = typeof __initial_auth_token !== 'undefined' ? __initial_auth_token : null;
+
+        let app, db, auth;
+        if (Object.keys(firebaseConfig).length > 0) {
+            try {
+                app = initializeApp(firebaseConfig);
+                db = getFirestore(app);
+                auth = getAuth(app);
+                console.log("Firebase services initialized.");
+            } catch (e) {
+                console.error("Firebase Initialization Error:", e);
+            }
+        }
+        
+        window.dbInstance = db;
+        window.authInstance = auth;
+        window.appId = appId;
+        window.initialAuthToken = initialAuthToken;
+
+        console.log("Firebase components are loaded and instances are available globally.");
+
+    </script>
+    <style>
+        /* Custom scrollbar for better visual integration with the dark theme */
+        ::-webkit-scrollbar {
+            width: 8px;
+        }
+        ::-webkit-scrollbar-thumb {
+            background-color: #4f46e5; /* Indigo-600 */
+            border-radius: 4px;
+        }
+        ::-webkit-scrollbar-track {
+            background: #1f2937; /* Gray-800 */
+        }
+    </style>
+</head>
+<body class="bg-gray-900">
+
+    <div id="root"></div>
+
+    <script type="text/babel">
+        // Helper to mimic React imports from global scope
+        const { useState, useEffect, useCallback, useMemo } = React;
+        const { getAuth, signInAnonymously, signInWithCustomToken, onAuthStateChanged } = window.firebase || {};
+        const { getFirestore, doc, setDoc, getDoc, collection, query, onSnapshot, where, addDoc, updateDoc, writeBatch } = window.firebase || {};
+
+        // Helper to access globally attached instances/variables
+        const db = window.dbInstance;
+        const auth = window.authInstance;
+        const appId = window.appId;
+        const initialAuthToken = window.initialAuthToken;
+
+        // --- Utility Hooks for State Management ---
+
+        const useAlert = () => {
+            const [alert, setAlert] = useState(null);
+            const showAlert = (message, type = 'info') => {
+                setAlert({ message, type });
+                setTimeout(() => setAlert(null), 4000);
+            };
+            return { alert, showAlert };
+        };
+
+        const useFirebase = () => {
+            const [userId, setUserId] = useState(null);
+            const [loading, setLoading] = useState(true);
+
+            useEffect(() => {
+                if (!auth || !db) {
+                    // console.error("Firebase services are not available.");
+                    setLoading(false);
+                    return;
+                }
+
+                const signIn = async () => {
+                    try {
+                        let userCredential;
+                        if (initialAuthToken) {
+                            userCredential = await signInWithCustomToken(auth, initialAuthToken);
+                        } else {
+                            userCredential = await signInAnonymously(auth);
+                        }
+                        setUserId(userCredential.user.uid);
+                    } catch (error) {
+                        // console.error("Firebase Auth Error (Falling back to anonymous):", error);
+                        try {
+                            const userCredential = await signInAnonymously(auth);
+                            setUserId(userCredential.user.uid);
+                        } catch (e) {
+                            // console.error("Final Auth Failure:", e);
+                        }
+                    } finally {
+                        setLoading(false);
+                    }
+                };
+
+                const unsubscribe = onAuthStateChanged(auth, (user) => {
+                    if (!user && !userId) {
+                        signIn();
+                    } else if (user) {
+                        setUserId(user.uid);
+                        setLoading(false);
+                    } else {
+                        setLoading(false);
+                    }
+                });
+
+                return () => unsubscribe();
+            }, [userId]);
+
+            return { db, auth, userId, loading };
+        };
+
+        // --- Custom Components ---
+
+        const Header = ({ currentView, setView, userId, currentUsername }) => {
+            const isClient = currentView === 'client';
+            return (
+                <header className="flex justify-between items-center p-4 bg-gray-900 shadow-xl border-b border-indigo-700">
+                    <div className="flex items-center space-x-2">
+                        <svg className="w-8 h-8 text-orange-500" fill="currentColor" viewBox="0 0 24 24">
+                            <path d="M12 2L2 7V17L12 22L22 17V7L12 2ZM12 19.3L4 15.1V8.9L12 13.1V19.3ZM20 15.1L12 19.3V13.1L20 8.9V15.1Z"/>
+                        </svg>
+                        <h1 className="text-3xl font-extrabold text-white tracking-wider">
+                            Tender<span className="text-indigo-400">Bid</span>
+                        </h1>
+                    </div>
+                    <div className="flex items-center space-x-4">
+                        <button
+                            onClick={() => setView('contractor')}
+                            className={`px-4 py-2 text-sm font-semibold rounded-full transition duration-300 ${!isClient ? 'bg-indigo-600 text-white shadow-lg' : 'bg-gray-700 text-gray-300 hover:bg-gray-600'}`}
+                        >
+                            Contractor View
+                        </button>
+                        <button
+                            onClick={() => setView('client')}
+                            className={`px-4 py-2 text-sm font-semibold rounded-full transition duration-300 ${isClient ? 'bg-indigo-600 text-white shadow-lg' : 'bg-gray-700 text-gray-300 hover:bg-gray-600'}`}
+                        >
+                            Client View
+                        </button>
+                        <div className="flex items-center space-x-2 text-gray-400 text-sm">
+                            <span className="hidden sm:inline">User:</span>
+                            <span className="font-mono text-indigo-400">{currentUsername || userId?.substring(0, 8) + '...'}</span>
+                        </div>
+                    </div>
+                </header>
+            );
+        };
+
+        const CustomModal = ({ isOpen, onClose, title, children }) => {
+            if (!isOpen) return null;
+            return (
+                <div className="fixed inset-0 z-50 flex items-center justify-center bg-gray-900 bg-opacity-75 p-4 transition-opacity">
+                    <div className="bg-gray-800 rounded-xl shadow-2xl w-full max-w-lg overflow-hidden transform transition-all border border-indigo-700">
+                        <div className="p-4 border-b border-gray-700 flex justify-between items-center">
+                            <h3 className="text-xl font-bold text-white">{title}</h3>
+                            <button onClick={onClose} className="text-gray-400 hover:text-white transition">
+                                <svg className="w-6 h-6" fill="none" stroke="currentColor" viewBox="0 0 24 24" xmlns="http://www.w3.org/2000/svg"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M6 18L18 6M6 6l12 12"></path></svg>
+                            </button>
+                        </div>
+                        <div className="p-6 text-gray-200">
+                            {children}
+                        </div>
+                    </div>
+                </div>
+            );
+        };
+
+        const ChatModal = ({ isOpen, onClose, tender, userId, currentUsername, db }) => {
+            const [messages, setMessages] = useState([]);
+            const [newMessage, setNewMessage] = useState('');
+            const [chatLoading, setChatLoading] = useState(true);
+
+            const chatId = useMemo(() => `chat-${tender.id}`, [tender.id]);
+            const chatCollectionRef = useMemo(() => collection(db, 'artifacts', appId, 'public', 'data', 'chats', chatId, 'messages'), [db, chatId]);
+
+            useEffect(() => {
+                if (!isOpen || !db || !chatId) return;
+
+                const chatQuery = query(chatCollectionRef);
+                setChatLoading(true);
+
+                const unsubscribe = onSnapshot(chatQuery, (snapshot) => {
+                    const msgs = snapshot.docs.map(doc => ({
+                        id: doc.id,
+                        ...doc.data()
+                    })).sort((a, b) => (a.timestamp?.toMillis() || 0) - (b.timestamp?.toMillis() || 0));
+                    setMessages(msgs);
+                    setChatLoading(false);
+                }, (error) => {
+                    console.error("Chat Listener Error:", error);
+                    setChatLoading(false);
+                });
+
+                return () => unsubscribe();
+            }, [isOpen, db, chatId, chatCollectionRef]);
+
+            const handleSendMessage = useCallback(async () => {
+                if (newMessage.trim() === '') return;
+                if (!db || !userId) return;
+
+                try {
+                    await addDoc(chatCollectionRef, {
+                        senderId: userId,
+                        senderName: currentUsername,
+                        text: newMessage.trim(),
+                        timestamp: new Date(),
+                        tenderId: tender.id,
+                    });
+                    setNewMessage('');
+                } catch (error) {
+                    console.error("Error sending message:", error);
+                    // Use custom alert instead of window.alert
+                    document.getElementById('root').scrollIntoView();
+                }
+            }, [newMessage, userId, chatCollectionRef, tender.id, db, currentUsername]);
+
+            const isMyMessage = (msgSenderId) => msgSenderId === userId;
+
+            return (
+                <CustomModal isOpen={isOpen} onClose={onClose} title={`Chat: ${tender.title}`}>
+                    <div className="h-80 flex flex-col justify-between">
+                        <div className="flex-grow overflow-y-auto p-2 space-y-3 bg-gray-700 rounded-lg max-h-[20rem]">
+                            {chatLoading ? (
+                                <p className="text-indigo-400">Loading messages...</p>
+                            ) : messages.length === 0 ? (
+                                <p className="text-gray-400 text-center py-10">Start the conversation!</p>
+                            ) : (
+                                messages.map((msg) => (
+                                    <div key={msg.id} className={`flex ${isMyMessage(msg.senderId) ? 'justify-end' : 'justify-start'}`}>
+                                        <div className={`max-w-xs px-4 py-2 rounded-xl shadow-md ${isMyMessage(msg.senderId) ? 'bg-indigo-600 text-white rounded-br-none' : 'bg-gray-600 text-gray-100 rounded-tl-none'}`}>
+                                            <p className="text-xs font-semibold mb-1 opacity-75">{isMyMessage(msg.senderId) ? 'You' : msg.senderName}</p>
+                                            <p className="text-sm break-words">{msg.text}</p>
+                                        </div>
+                                    </div>
+                                ))
+                            )}
+                        </div>
+                        <div className="pt-4 flex space-x-2">
+                            <input
+                                type="text"
+                                value={newMessage}
+                                onChange={(e) => setNewMessage(e.target.value)}
+                                onKeyPress={(e) => e.key === 'Enter' && handleSendMessage()}
+                                placeholder="Type your message..."
+                                className="flex-grow p-3 bg-gray-600 text-white rounded-lg border border-gray-500 focus:border-indigo-500 focus:ring-1 focus:ring-indigo-500"
+                            />
+                            <button
+                                onClick={handleSendMessage}
+                                className="bg-indigo-600 hover:bg-indigo-700 text-white font-semibold py-2 px-4 rounded-lg transition duration-300"
+                            >
+                                Send
+                            </button>
+                        </div>
+                    </div>
+                </CustomModal>
+            );
+        };
+
+        const PlaceBidModal = ({ isOpen, onClose, tender, userId, db, showAlert, currentUsername }) => {
+            const [bidAmount, setBidAmount] = useState('');
+            const [durationDays, setDurationDays] = useState('');
+            const [loading, setLoading] = useState(false);
+
+            const handlePlaceBid = async () => {
+                const amount = parseFloat(bidAmount);
+                const duration = parseInt(durationDays);
+
+                if (isNaN(amount) || amount <= 0 || isNaN(duration) || duration <= 0) {
+                    showAlert('Please enter valid positive numbers for Bid Amount and Duration.', 'warning');
+                    return;
+                }
+
+                setLoading(true);
+                try {
+                    const bidsCollectionRef = collection(db, 'artifacts', appId, 'public', 'data', 'bids');
+                    await addDoc(bidsCollectionRef, {
+                        tenderId: tender.id,
+                        contractorId: userId,
+                        contractorName: currentUsername,
+                        amount: amount,
+                        durationDays: duration,
+                        platformFee: amount * 0.05, // 5% Commission
+                        netEarnings: amount * 0.95,
+                        status: 'pending',
+                        timestamp: new Date(),
+                    });
+                    showAlert(`Bid of ₹${amount.toFixed(2)} placed successfully!`, 'success');
+                    onClose();
+                } catch (error) {
+                    console.error("Error placing bid:", error);
+                    showAlert('Failed to place bid. Please check your network.', 'error');
+                } finally {
+                    setLoading(false);
+                }
+            };
+
+            return (
+                <CustomModal isOpen={isOpen} onClose={onClose} title={`Place Bid for ${tender.title}`}>
+                    <p className="mb-4 text-indigo-400">Platform fee: 5% of the total bid amount will be deducted.</p>
+                    <div className="space-y-4">
+                        <div>
+                            <label className="block text-sm font-medium mb-1">Bid Amount (₹)</label>
+                            <input
+                                type="number"
+                                value={bidAmount}
+                                onChange={(e) => setBidAmount(e.target.value)}
+                                placeholder="e.g., 50000"
+                                className="w-full p-3 bg-gray-700 border border-gray-600 rounded-lg text-white focus:border-indigo-500"
+                                min="1"
+                            />
+                        </div>
+                        <div>
+                            <label className="block text-sm font-medium mb-1">Estimated Duration (Days)</label>
+                            <input
+                                type="number"
+                                value={durationDays}
+                                onChange={(e) => setDurationDays(e.target.value)}
+                                placeholder="e.g., 7"
+                                className="w-full p-3 bg-gray-700 border border-gray-600 rounded-lg text-white focus:border-indigo-500"
+                                min="1"
+                            />
+                        </div>
+                        <div className="pt-4">
+                            <button
+                                onClick={handlePlaceBid}
+                                disabled={loading}
+                                className="w-full bg-orange-600 hover:bg-orange-700 text-white font-bold py-3 rounded-lg shadow-lg transition duration-300 disabled:opacity-50"
+                            >
+                                {loading ? 'Placing Bid...' : 'Submit Bid'}
+                            </button>
+                        </div>
+                    </div>
+                </CustomModal>
+            );
+        };
+
+        const PostTenderForm = ({ userId, db, showAlert, tenders }) => {
+            const [formData, setFormData] = useState({ title: '', description: '', location: '', bbmpId: '' });
+            const [agreeToTerms, setAgreeToTerms] = useState(false);
+            const [loading, setLoading] = useState(false);
+
+            const handleChange = (e) => {
+                setFormData({ ...formData, [e.target.name]: e.target.value });
+            };
+
+            const handlePostTender = async () => {
+                if (!userId || loading) return;
+                if (!formData.title || !formData.description || !formData.location || !formData.bbmpId) {
+                    showAlert('Please fill in all required fields.', 'warning');
+                    return;
+                }
+                if (!agreeToTerms) {
+                    showAlert('You must agree to the Platform Terms before posting.', 'warning');
+                    return;
+                }
+
+                setLoading(true);
+                try {
+                    const tendersCollectionRef = collection(db, 'artifacts', appId, 'public', 'data', 'tenders');
+                    await addDoc(tendersCollectionRef, {
+                        ...formData,
+                        clientId: userId,
+                        status: 'Open',
